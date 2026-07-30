@@ -1,0 +1,52 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [assigned, opened, synchronize, reopened]
+  workflow_call:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['3.11', '3.12', '3.13']
+
+    steps:
+    - uses: actions/checkout@v5
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v6
+
+    - name: Set up Python ${{ matrix.python-version }}
+      run: uv python install ${{ matrix.python-version }}
+
+    - name: Install dependencies
+      run: uv sync --extra test
+
+    - name: Run tests with pytest
+      run: uv run pytest --cov=zarr_vlen_ndarray --cov-report=xml --cov-report=term
+
+  # The declared floor: zarr 3.1.0 (first release with the ZDType API and the
+  # zarr.data_type / zarr.codecs entry-point groups).
+  test-zarr-floor:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v5
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v6
+
+    - name: Set up Python
+      run: uv python install 3.11
+
+    - name: Install with the zarr floor pin
+      run: |
+        uv venv
+        uv pip install 'zarr==3.1.0' pytest .
+
+    - name: Run tests with pytest
+      run: uv run --no-sync pytest -v
