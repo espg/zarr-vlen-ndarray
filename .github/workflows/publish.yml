@@ -1,0 +1,65 @@
+name: Publish
+
+# Pushing a *.*.* tag builds sdist+wheel and publishes to PyPI via OIDC
+# trusted publishing (no token secrets). The PyPI pending-publisher
+# registration must name this repo, this filename (publish.yml), and the
+# `pypi` environment for the upload to be accepted.
+on:
+  push:
+    tags: ["*.*.*"]
+
+jobs:
+  test:
+    uses: ./.github/workflows/test.yml
+
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        # hatch-vcs derives the version from the tag; needs full history.
+        fetch-depth: 0
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v6
+
+    - name: Build sdist and wheel
+      run: uv build
+
+    - uses: actions/upload-artifact@v4
+      with:
+        name: dist
+        path: dist/
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+    - uses: actions/download-artifact@v4
+      with:
+        name: dist
+        path: dist/
+
+    - name: Publish to PyPI
+      uses: pypa/gh-action-pypi-publish@release/v1
+
+  release:
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+    - uses: actions/download-artifact@v4
+      with:
+        name: dist
+        path: dist/
+
+    - name: GitHub release
+      uses: softprops/action-gh-release@v2
+      with:
+        files: dist/*
+        generate_release_notes: true
