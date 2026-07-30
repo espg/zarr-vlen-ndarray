@@ -1,0 +1,105 @@
+[build-system]
+requires = ["hatchling", "hatch-vcs"]
+build-backend = "hatchling.build"
+
+[project]
+name = "zarr-vlen-ndarray"
+dynamic = ["version"]
+description = "Typed variable-length ndarray data type (vlen-ndarray) for Zarr v3"
+readme = "README.md"
+# Matches zarr-python 3.1.x's floor (>=3.11).
+requires-python = ">=3.11"
+license = {file = "LICENSE"}
+authors = [
+    {name = "Shane Grigsby", email = "refuge@rocktalus.com"},
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering",
+]
+
+dependencies = [
+    "numpy>=1.26",
+    # ZDType API + the `zarr.data_type` / `zarr.codecs` entry-point groups
+    # both shipped in zarr-python 3.1.0 (the v3 data-type refactor,
+    # zarr-python PR #2874); verified against the v3.1.0 tag.
+    "zarr>=3.1.0",
+    # numcodecs.vlen.VLenBytes provides the wire format (imported directly,
+    # not just transitively via zarr). 0.14 is zarr 3.x's own floor.
+    "numcodecs>=0.14",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=8.0",
+    "pytest-cov",
+]
+
+# Entry points: zarr-python discovers the data type via the `zarr.data_type`
+# group (registered under the class's _zarr_v3_name) and the codec via the
+# `zarr.codecs` group (entry-point name == codec name). With this package
+# installed, plain `zarr.open` resolves vlen-ndarray stores — no explicit
+# `import zarr_vlen_ndarray` required.
+[project.entry-points."zarr.data_type"]
+vlen-ndarray = "zarr_vlen_ndarray:VlenNDArray"
+
+[project.entry-points."zarr.codecs"]
+vlen-ndarray = "zarr_vlen_ndarray:VlenNDArrayCodec"
+
+[project.urls]
+Homepage = "https://github.com/espg/zarr-vlen-ndarray"
+Repository = "https://github.com/espg/zarr-vlen-ndarray"
+Issues = "https://github.com/espg/zarr-vlen-ndarray/issues"
+Specification = "https://github.com/espg/zarr-vlen-ndarray/blob/main/SPEC.md"
+
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.build.hooks.vcs]
+version-file = "src/zarr_vlen_ndarray/_version.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/zarr_vlen_ndarray"]
+
+[tool.hatch.build.targets.sdist]
+only-include = [
+    "src/zarr_vlen_ndarray",
+    "tests",
+    "README.md",
+    "SPEC.md",
+    "LICENSE",
+    "pyproject.toml",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+lint.select = ["E", "F", "W", "I", "N"]
+lint.ignore = ["E501"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["zarr_vlen_ndarray", "conftest"]
+
+[tool.mypy]
+# 3.12 because zarr's own (py.typed) sources use PEP 695 syntax that mypy
+# refuses to parse under a 3.11 target; the package itself stays 3.11-clean
+# (the CI matrix runs the tests on 3.11).
+python_version = "3.12"
+ignore_missing_imports = true
+
+[dependency-groups]
+dev = [
+    "pytest",
+    "pytest-cov",
+    "ruff",
+    "mypy",
+]
