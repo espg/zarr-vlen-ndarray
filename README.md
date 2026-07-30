@@ -44,7 +44,13 @@ defines the element type for the `zagg-ragged/2` store revision
 
 ## Install
 
-Not yet on PyPI (see [docs/PUBLISHING.md](docs/PUBLISHING.md)). From source:
+From [PyPI](https://pypi.org/project/zarr-vlen-ndarray/):
+
+```sh
+pip install zarr-vlen-ndarray
+```
+
+Or from source:
 
 ```sh
 pip install git+https://github.com/espg/zarr-vlen-ndarray
