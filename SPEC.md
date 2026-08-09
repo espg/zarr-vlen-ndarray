@@ -7,8 +7,7 @@ the paired parameter-free **`array -> bytes` codec** that serializes them with
 
 The normative extension text lives in the [`registry/`](registry/) directory,
 formatted as [zarr-extensions](https://github.com/zarr-developers/zarr-extensions)
-registry entries (these are the files intended for the registry submission —
-see [`registry_submission_draft.md`](registry_submission_draft.md)):
+registry entries (these are the files intended for the registry submission):
 
 - **Data type**: [`registry/data-types/vlen-ndarray/README.md`](registry/data-types/vlen-ndarray/README.md)
   (with [`schema.json`](registry/data-types/vlen-ndarray/schema.json))
@@ -73,12 +72,12 @@ itself is tracked in [englacial/zagg#340](https://github.com/englacial/zagg/issu
 
 ## Registry status
 
-Not yet registered. `vlen-ndarray` does not conflict with any entry in
-zarr-developers/zarr-extensions as of 2026-08-08 (re-checked against the
-`data-types/` and `codecs/` listings at upstream `4da7b37`). The prepared
-submission is
-[`registry_submission_draft.md`](registry_submission_draft.md); until the
-registry PR merges, the name should be treated as provisional.
+Submitted, not yet registered. The registry PR is
+[zarr-extensions#71](https://github.com/zarr-developers/zarr-extensions/pull/71),
+which registers the `registry/` files verbatim. `vlen-ndarray` did not
+conflict with any entry in zarr-developers/zarr-extensions as of 2026-08-08
+(checked against the `data-types/` and `codecs/` listings at upstream
+`4da7b37`). Until that PR merges, the name should be treated as provisional.
 
 Related upstream discussions:
 

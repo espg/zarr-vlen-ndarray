@@ -140,13 +140,11 @@ without installing anything, the metadata-only downgrade to `bytes` +
 
 ## Registry status
 
-The `vlen-ndarray` name is **not yet registered** with
-[zarr-developers/zarr-extensions](https://github.com/zarr-developers/zarr-extensions)
-(no conflicting entry exists as of 2026-08-08, re-checked at upstream
-`4da7b37`). The prepared submission —
-registry-formatted spec files plus a PR description — is in
-[`registry/`](registry/) and
-[`registry_submission_draft.md`](registry_submission_draft.md).
+The `vlen-ndarray` name is **submitted but not yet registered** with
+[zarr-developers/zarr-extensions](https://github.com/zarr-developers/zarr-extensions):
+see [zarr-extensions#71](https://github.com/zarr-developers/zarr-extensions/pull/71).
+Until that PR merges, treat the name as provisional. The registry-formatted
+spec files in [`registry/`](registry/) are the ones under review.
 
 ## Development
 
