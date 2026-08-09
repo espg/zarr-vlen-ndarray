@@ -13,6 +13,7 @@ see [`registry_submission_draft.md`](registry_submission_draft.md)):
 - **Data type**: [`registry/data-types/vlen-ndarray/README.md`](registry/data-types/vlen-ndarray/README.md)
   (with [`schema.json`](registry/data-types/vlen-ndarray/schema.json))
 - **Codec**: [`registry/codecs/vlen-ndarray/README.md`](registry/codecs/vlen-ndarray/README.md)
+  (with [`schema.json`](registry/codecs/vlen-ndarray/schema.json))
 
 Conformance requirements in those documents use [RFC2119] terminology, per
 the zarr-extensions document conventions.
@@ -30,7 +31,7 @@ Metadata form:
     "configuration": {"dtype": "float32", "inner_shape": [2]}
   },
   "fill_value": "",
-  "codecs": [{"name": "vlen-ndarray"}, {"name": "zstd", "configuration": {"level": 3, "checksum": false}}]
+  "codecs": [{"name": "vlen-ndarray"}, {"name": "zstd", "configuration": {"level": 3}}]
 }
 ```
 
@@ -73,8 +74,9 @@ itself is tracked in [englacial/zagg#340](https://github.com/englacial/zagg/issu
 ## Registry status
 
 Not yet registered. `vlen-ndarray` does not conflict with any entry in
-zarr-developers/zarr-extensions as of 2026-07-30 (checked against the
-`data-types/` and `codecs/` listings). The prepared submission is
+zarr-developers/zarr-extensions as of 2026-08-08 (re-checked against the
+`data-types/` and `codecs/` listings at upstream `4da7b37`). The prepared
+submission is
 [`registry_submission_draft.md`](registry_submission_draft.md); until the
 registry PR merges, the name should be treated as provisional.
 

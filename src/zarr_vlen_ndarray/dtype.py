@@ -66,6 +66,38 @@ ALLOWED_SCALAR_DTYPES = frozenset(
 )
 
 
+def _normalize_scalar_dtype(value: object) -> str:
+    """Normalize a user-supplied inner scalar dtype to its Zarr v3 core name.
+
+    Accepts anything ``np.dtype`` understands — a core data type name, a NumPy
+    dtype object, a NumPy scalar type, or a byte-order-agnostic/little-endian
+    type string — and returns the canonical core name.
+
+    Explicitly big-endian spellings (``">f4"``) are rejected rather than
+    normalized: the wire format is always little-endian, so silently returning
+    ``float32`` would give the caller the opposite byte order from the one
+    requested, and ``">f4"`` is not a value the registered ``schema.json``
+    accepts for ``configuration.dtype``.
+    """
+    if isinstance(value, str) and value in ALLOWED_SCALAR_DTYPES:
+        return value
+    try:
+        np_dtype = np.dtype(value)  # type: ignore[call-overload]
+    except TypeError as exc:
+        raise ValueError(
+            f"dtype must be one of {sorted(ALLOWED_SCALAR_DTYPES)}, got {value!r}"
+        ) from exc
+    if np_dtype.byteorder == ">":
+        raise ValueError(
+            f"dtype must not request big-endian byte order, got {value!r}: "
+            "vlen-ndarray elements are always encoded little-endian."
+        )
+    name = np_dtype.name
+    if name not in ALLOWED_SCALAR_DTYPES:
+        raise ValueError(f"dtype must be one of {sorted(ALLOWED_SCALAR_DTYPES)}, got {value!r}")
+    return name
+
+
 class VlenScalar(np.ndarray):
     """A cell value that compares as a scalar.
 
@@ -160,11 +192,11 @@ class VlenNDArray(ZDType[np.dtypes.ObjectDType, np.ndarray], HasObjectCodec):  #
 
     def __post_init__(self) -> None:
         # Normalize (allow np.dtype / np.float32 / lists) then validate.
-        name = np.dtype(self.dtype).name
-        object.__setattr__(self, "dtype", name)
-        if name not in ALLOWED_SCALAR_DTYPES:
+        object.__setattr__(self, "dtype", _normalize_scalar_dtype(self.dtype))
+        if any(isinstance(dim, bool) for dim in self.inner_shape):
+            # bool is a subclass of int; True would silently become 1.
             raise ValueError(
-                f"dtype must be one of {sorted(ALLOWED_SCALAR_DTYPES)}, got {self.dtype!r}"
+                f"inner_shape dimensions must be integers, got {tuple(self.inner_shape)!r}"
             )
         shape = tuple(int(dim) for dim in self.inner_shape)
         object.__setattr__(self, "inner_shape", shape)
@@ -207,16 +239,32 @@ class VlenNDArray(ZDType[np.dtypes.ObjectDType, np.ndarray], HasObjectCodec):  #
 
     @classmethod
     def _check_json_v3(cls, data: DTypeJSON) -> bool:
-        return (
+        # This mirrors registry/data-types/vlen-ndarray/schema.json exactly, so
+        # that metadata the registered schema rejects never reaches the
+        # constructor: anything this returns False for is reported by
+        # _from_json_v3 as a DataTypeValidationError, which is the only
+        # exception zarr's data type resolution loop catches.
+        if not (
             isinstance(data, Mapping)
             and set(data.keys()) == {"name", "configuration"}
             and data["name"] == cls._zarr_v3_name
             and isinstance(data["configuration"], Mapping)
             and set(data["configuration"].keys()) == {"dtype", "inner_shape"}
-            and isinstance(data["configuration"]["dtype"], str)
-            and isinstance(data["configuration"]["inner_shape"], Sequence)
-            and not isinstance(data["configuration"]["inner_shape"], (str, bytes))
-            and all(isinstance(dim, int) for dim in data["configuration"]["inner_shape"])
+        ):
+            return False
+        config = data["configuration"]
+        dtype = config["dtype"]
+        inner_shape = config["inner_shape"]
+        return (
+            isinstance(dtype, str)
+            and dtype in ALLOWED_SCALAR_DTYPES
+            and isinstance(inner_shape, Sequence)
+            and not isinstance(inner_shape, (str, bytes))
+            # bool is a subclass of int, but the schema rejects it.
+            and all(
+                isinstance(dim, int) and not isinstance(dim, bool) and dim >= 1
+                for dim in inner_shape
+            )
         )
 
     @classmethod
@@ -275,11 +323,15 @@ class VlenNDArray(ZDType[np.dtypes.ObjectDType, np.ndarray], HasObjectCodec):  #
                 f"compatible with the data type {self}."
             )
         arr = np.asarray(data, dtype=self.item_dtype)
-        if arr.size == 0:
-            return arr.reshape((0, *self.inner_shape))
         expected_ndim = 1 + len(self.inner_shape)
         if arr.ndim == expected_ndim and arr.shape[1:] == self.inner_shape:
             return np.ascontiguousarray(arr)
+        if arr.shape == (0,):
+            # An empty flat sequence (``[]``, ``np.empty(0)``) is an
+            # unambiguous spelling of the empty element. Any other zero-sized
+            # shape is a caller error and is reported below rather than being
+            # silently reshaped.
+            return arr.reshape((0, *self.inner_shape))
         raise TypeError(
             f"Cannot convert array of shape {arr.shape} to a scalar of the data type "
             f"{self}: expected shape (n, {', '.join(map(str, self.inner_shape))})."

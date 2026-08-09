@@ -20,9 +20,9 @@ PR — remains, and that is an espg action.
    - `registry/codecs/vlen-ndarray/schema.json` → `codecs/vlen-ndarray/schema.json`
      (added during prep: the registry README asks for a `schema.json` per
      extension and every sibling codec has one)
-3. ~~Fix the two cross-repo relative links to the reference implementation if
-   desired~~ — left pointing at https://github.com/espg/zarr-vlen-ndarray,
-   which resolves publicly.
+3. ~~Fix the links to the reference implementation if desired~~ — the two of
+   them (one in each README) are left pointing at
+   https://github.com/espg/zarr-vlen-ndarray, which resolves publicly.
 4. ~~Run `npx prettier -w **/schema.json`~~ — both schema files were already
    prettier-clean.
 5. Open as a **draft PR** first (the registry README recommends this for
@@ -101,17 +101,45 @@ HEALPix grids; the store spec's `/2` revision cites this name
       `zarr-vlen-ndarray`, `zagg`, numcodecs, zarr-specs — which matters
       because the registry's only CI job is a lychee link check with
       `fail: true`. All relative links resolve within the fork.
-- [x] Schemas validate every example in the two READMEs, and reject a
-      non-core `dtype`, a missing `inner_shape`, a bare-string data type
-      name, and an unknown codec configuration key.
+- [x] Schemas validate the `data_type` object and the codec objects appearing
+      in the two READMEs' examples. The schemas describe those objects, not
+      the metadata that contains them, so the full array metadata document,
+      the bare `{"dtype": "uint64", "inner_shape": []}` configuration
+      fragment, and the codec README's `{"data_type": ..., "codecs": ...}`
+      fragment are not themselves schema instances and are not expected to
+      validate. The schemas reject a non-core `dtype`, a byte-order-prefixed
+      `dtype` spelling, a missing `inner_shape`, a bare-string data type
+      name, a non-integer or `< 1` `inner_shape` member, and an unknown codec
+      configuration key.
 - [x] Consider linking zarr-extensions#57 in the PR body (done above) so the
       ZFWG sees the relationship to the container-types discussion.
 
 ## Note on the codec schema shape
 
-`codecs/vlen-ndarray/schema.json` uses the plain object form (as `reshape`
-and `packbits` do), not the `oneOf` with a bare-string alternative that
-`vlen-bytes` and `vlen-utf8` carry. That alternative exists for the legacy
-v2 string-name spelling of those codecs; a newly registered v3 codec has no
-such history, and the codec README already requires the `name` member.
-`configuration` is permitted but must be empty.
+`codecs/vlen-ndarray/schema.json` is a `oneOf` over the codec object and the
+bare string `"vlen-ndarray"`, matching `codecs/vlen-bytes/schema.json`,
+`codecs/vlen-utf8/schema.json` and `codecs/bytes/schema.json`. The
+bare-string alternative is not a Zarr v2 compatibility affordance: it is the
+short-hand form the v3 core spec defines for every extension point —
+"Instead of extension objects, short-hand names MAY be used if no
+configuration metadata is required. They are equivalent to extension objects
+with just a name key." This codec requires no configuration, so
+`"codecs": ["vlen-ndarray"]` is conformant v3 metadata and the schema must
+not reject it. (`codecs/reshape` and `codecs/packbits` omit the alternative,
+but `reshape` requires a configuration; the registry's own generic codec
+definition, in `codecs/n5_default/schema.json`, allows a bare string.) In the
+object form, `configuration` is permitted but must be empty.
+
+The same spec section adds a caveat the codec README now carries: an
+implementation needing backwards compatibility with Zarr v3.0 "must not use
+the `must_understand` field or the short-hand name form of an Extension
+definition in `codecs`". That is why the READMEs' examples use the object
+form even though the schema accepts both, and it explains why zarr-python
+does not currently read `"codecs": ["vlen-ndarray"]` — a general zarr-python
+limitation that affects `vlen-bytes` identically, not something specific to
+this extension.
+
+The data type schema deliberately does *not* offer the bare-string
+alternative: `vlen-ndarray`'s `configuration` is required — `dtype` and
+`inner_shape` have no defaults — so the short-hand form does not apply. Both
+READMEs state their respective rule.

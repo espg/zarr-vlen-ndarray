@@ -142,7 +142,8 @@ without installing anything, the metadata-only downgrade to `bytes` +
 
 The `vlen-ndarray` name is **not yet registered** with
 [zarr-developers/zarr-extensions](https://github.com/zarr-developers/zarr-extensions)
-(no conflicting entry exists as of 2026-07-30). The prepared submission —
+(no conflicting entry exists as of 2026-08-08, re-checked at upstream
+`4da7b37`). The prepared submission —
 registry-formatted spec files plus a PR description — is in
 [`registry/`](registry/) and
 [`registry_submission_draft.md`](registry_submission_draft.md).

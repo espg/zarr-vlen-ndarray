@@ -13,6 +13,14 @@ The value of the `name` member in the codec object MUST be `vlen-ndarray`.
 None. The element scalar data type and inner shape come from the array's
 `vlen-ndarray` data type configuration.
 
+Because this codec takes no configuration, the `configuration` member MAY be
+omitted; if it is present it MUST be an empty object. As for any extension
+that requires no configuration metadata, the short-hand form — the bare
+string `"vlen-ndarray"` in place of the codec object — MAY also be used.
+Writers that require backwards compatibility with Zarr v3.0 SHOULD use the
+object form, since the short-hand name form in `codecs` is not available to
+v3.0 implementations.
+
 ## Example
 
 For example, the array metadata below specifies that the array contains
@@ -50,10 +58,24 @@ Consequently, for any chunk, the encoded representation is byte-identical to
 encoding the per-element raw bytes with the `vlen-bytes` codec. On decode,
 each element's item count `n` is recovered from its byte length, which MUST
 be a whole multiple of the element item size; decoders MUST report an error
-otherwise.
+otherwise. The u32le element count MUST equal the product of the chunk shape;
+decoders MUST report an error otherwise.
+
+Both counts in the framing are unsigned 32-bit integers, which bounds what
+this codec can represent: a chunk MUST NOT contain more than `2^32 - 1`
+elements, and an element's serialized payload MUST NOT exceed `2^32 - 1`
+bytes — equivalently, `n` MUST NOT exceed `floor((2^32 - 1) / item_size)`,
+where `item_size` is the size in bytes of one `(1, *inner_shape)` item.
+Encoders MUST report an error rather than truncate or overflow either count.
 
 See https://numcodecs.readthedocs.io/en/stable/other/vlen.html#vlenbytes for
 details about the framing.
+
+## Implementation
+
+A reference implementation is provided by the
+[`zarr-vlen-ndarray`](https://github.com/espg/zarr-vlen-ndarray) Python
+package (registered with zarr-python via entry points).
 
 ## Change log
 
