@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "vlen-ndarray",
+  "type": "object",
+  "properties": {
+    "name": {
+      "const": "vlen-ndarray"
+    },
+    "configuration": {
+      "type": "object",
+      "additionalProperties": false
+    }
+  },
+  "required": ["name"],
+  "additionalProperties": false
+}
