@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "zarr-vlen-ndarray"
 dynamic = ["version"]
-description = "Typed variable-length ndarray data type (vlen-ndarray) for Zarr v3"
+description = "Typed ndarray elements for Zarr v3: the ndarray data type and the vlen-ndarray codec"
 readme = "README.md"
 # Matches zarr-python 3.1.x's floor (>=3.11).
 requires-python = ">=3.11"
@@ -40,13 +40,14 @@ test = [
     "pytest-cov",
 ]
 
-# Entry points: zarr-python discovers the data type via the `zarr.data_type`
-# group (registered under the class's _zarr_v3_name) and the codec via the
-# `zarr.codecs` group (entry-point name == codec name). With this package
-# installed, plain `zarr.open` resolves vlen-ndarray stores — no explicit
-# `import zarr_vlen_ndarray` required.
+# Entry points: the data type under the `zarr.data_type` group (entry-point
+# name == the class's _zarr_v3_name) and the codec under `zarr.codecs`
+# (entry-point name == codec name). zarr-python lazy-loads the codec group on
+# demand, but collects `zarr.data_type` entry points into a lazy-load list it
+# never flushes, so `import zarr_vlen_ndarray` is still required before opening
+# a store (see tests/test_registration.py and the README).
 [project.entry-points."zarr.data_type"]
-vlen-ndarray = "zarr_vlen_ndarray:VlenNDArray"
+ndarray = "zarr_vlen_ndarray:NDArray"
 
 [project.entry-points."zarr.codecs"]
 vlen-ndarray = "zarr_vlen_ndarray:VlenNDArrayCodec"

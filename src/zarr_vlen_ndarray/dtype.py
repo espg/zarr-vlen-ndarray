@@ -1,27 +1,32 @@
-"""The ``vlen-ndarray`` Zarr v3 data type.
+"""The ``ndarray`` Zarr v3 data type.
 
-Each array element is a variable-length ndarray: shape ``(n, *inner_shape)``
-with ``n`` varying per element and ``inner_shape`` + scalar ``dtype`` fixed by
-the data type's configuration. In-memory representation is a NumPy object
-array whose cells are ndarrays.
+Each array element is itself an ndarray of a fixed scalar ``dtype`` whose
+shape matches a configured pattern in which ``None`` (JSON ``null``) marks a
+variable-length dimension: ``shape=(None, 2)`` describes elements of shape
+``(n, 2)`` with ``n`` varying per element, ``shape=(3, 2)`` describes fixed
+``(3, 2)`` elements. In-memory representation is a NumPy object array whose
+cells are ndarrays.
 
 Zarr v3 metadata form::
 
-    {"name": "vlen-ndarray", "configuration": {"dtype": "float32", "inner_shape": [2]}}
+    {"name": "ndarray", "configuration": {"dtype": "float32", "shape": [null, 2]}}
 
-Normative spec: SPEC.md in this repository.
+The data type accepts the full shape-pattern grammar; each paired
+``array -> bytes`` codec constrains the patterns it serves (the packaged
+``vlen-ndarray`` codec serves exactly one variable dimension, in the leading
+position). Normative spec: SPEC.md in this repository.
 
 Scalar (fill value) representation
 ----------------------------------
 NumPy cannot treat a naked ndarray as a scalar: zarr's fill machinery
 (``np.full(..., fill_value=scalar)``, ``out[selection] = scalar``, and
 ``NDBuffer.all_equal(scalar)``) would broadcast it by shape and crash. The
-scalar produced by :meth:`VlenNDArray.cast_scalar` (which zarr stores as the
+scalar produced by :meth:`NDArray.cast_scalar` (which zarr stores as the
 array's in-memory fill value) is therefore a 0-d object ndarray "box" whose
 single item is a :class:`VlenScalar` — an ndarray subclass whose ``==``
 compares whole cells and returns a plain bool. NumPy broadcasting unwraps the
 box on assignment, so cells filled from the fill value hold a ``VlenScalar``
-of shape ``(n, *inner_shape)`` that behaves like a regular ndarray in every
+of the fill element's shape that behaves like a regular ndarray in every
 other respect.
 """
 
@@ -34,13 +39,25 @@ from typing import TYPE_CHECKING, Any, ClassVar, Literal, Self, cast, overload
 
 import numpy as np
 from zarr.core.dtype.common import HasObjectCodec
-from zarr.dtype import DataTypeValidationError, ZDType
+from zarr.dtype import ZDType
+
+# zarr >= 3.2 canonical location for DataTypeValidationError; importing it from
+# zarr.dtype there goes through a deprecation shim, which also breaks mypy's
+# view of the symbol ("object" not callable). zarr 3.1.x (the floor) has it in
+# zarr.dtype only.
+if TYPE_CHECKING:
+    from zarr.errors import DataTypeValidationError
+else:
+    try:
+        from zarr.errors import DataTypeValidationError
+    except ImportError:  # pragma: no cover - zarr 3.1.x
+        from zarr.dtype import DataTypeValidationError
 
 if TYPE_CHECKING:
     from zarr.core.common import JSON, ZarrFormat
     from zarr.core.dtype.common import DTypeJSON, DTypeSpec_V2, DTypeSpec_V3
 
-DTYPE_NAME = "vlen-ndarray"
+DTYPE_NAME = "ndarray"
 
 # Fixed-size Zarr v3 core data types permitted as the inner scalar type.
 # These names coincide with NumPy dtype names. Variable-size and parameterized
@@ -90,7 +107,7 @@ def _normalize_scalar_dtype(value: object) -> str:
     if np_dtype.byteorder == ">":
         raise ValueError(
             f"dtype must not request big-endian byte order, got {value!r}: "
-            "vlen-ndarray elements are always encoded little-endian."
+            "ndarray elements are always encoded little-endian."
         )
     name = np_dtype.name
     if name not in ALLOWED_SCALAR_DTYPES:
@@ -167,41 +184,54 @@ def unbox(value: object) -> object:
 # which predates container scalars; the runtime contract only requires the scalar
 # methods below, so the parametrization is ignored for the type checker.
 @dataclass(frozen=True, kw_only=True)
-class VlenNDArray(ZDType[np.dtypes.ObjectDType, np.ndarray], HasObjectCodec):  # type: ignore[type-var]
-    """Zarr v3 data type for variable-length ndarray elements.
+class NDArray(ZDType[np.dtypes.ObjectDType, np.ndarray], HasObjectCodec):  # type: ignore[type-var]
+    """Zarr v3 data type for ndarray elements.
 
     Parameters
     ----------
     dtype : str
         Zarr v3 core data type name of the inner scalar (e.g. ``"float32"``,
         ``"uint64"``). Must be a fixed-size numeric/boolean type.
-    inner_shape : tuple[int, ...]
-        Trailing (fixed) dimensions of each element. ``()`` means elements are
-        1-D arrays of shape ``(n,)``; ``(2,)`` means elements have shape
-        ``(n, 2)``; the leading dimension ``n`` varies per element.
+    shape : tuple[int | None, ...]
+        Element shape pattern: one member per element dimension, each either
+        an integer ``>= 1`` (fixed extent) or ``None`` (variable extent, may
+        differ between elements; JSON ``null``). ``(None,)`` means elements
+        are 1-D arrays of shape ``(n,)``; ``(None, 2)`` means elements have
+        shape ``(n, 2)``; ``(3, 2)`` means fixed ``(3, 2)`` elements. Must be
+        non-empty.
     """
 
     dtype_cls = np.dtypes.ObjectDType
     _zarr_v3_name: ClassVar[str] = DTYPE_NAME
     # Marks this dtype as requiring an object codec; the id names the
     # `vlen-ndarray` array->bytes codec from this package.
-    object_codec_id: ClassVar[str] = DTYPE_NAME
+    object_codec_id: ClassVar[str] = "vlen-ndarray"
 
     dtype: str = "float32"
-    inner_shape: tuple[int, ...] = ()
+    shape: tuple[int | None, ...] = (None,)
 
     def __post_init__(self) -> None:
         # Normalize (allow np.dtype / np.float32 / lists) then validate.
         object.__setattr__(self, "dtype", _normalize_scalar_dtype(self.dtype))
-        if any(isinstance(dim, bool) for dim in self.inner_shape):
+        if len(self.shape) == 0:
+            raise ValueError(
+                "shape must have at least one dimension: a zero-dimensional element "
+                "is a plain scalar, so use the scalar data type directly."
+            )
+        if any(isinstance(dim, bool) for dim in self.shape):
             # bool is a subclass of int; True would silently become 1.
             raise ValueError(
-                f"inner_shape dimensions must be integers, got {tuple(self.inner_shape)!r}"
+                f"shape dimensions must be integers or None, got {tuple(self.shape)!r}"
             )
-        shape = tuple(int(dim) for dim in self.inner_shape)
-        object.__setattr__(self, "inner_shape", shape)
-        if any(dim < 1 for dim in shape):
-            raise ValueError(f"inner_shape dimensions must be >= 1, got {shape}")
+        shape = tuple(None if dim is None else int(dim) for dim in self.shape)
+        object.__setattr__(self, "shape", shape)
+        if any(dim is not None and dim < 1 for dim in shape):
+            raise ValueError(f"fixed shape dimensions must be >= 1, got {shape}")
+
+    @property
+    def variable_axes(self) -> tuple[int, ...]:
+        """Indices of the variable (``None``) dimensions of the pattern."""
+        return tuple(i for i, dim in enumerate(self.shape) if dim is None)
 
     @property
     def item_dtype(self) -> np.dtype[Any]:
@@ -209,12 +239,30 @@ class VlenNDArray(ZDType[np.dtypes.ObjectDType, np.ndarray], HasObjectCodec):  #
         return np.dtype(self.dtype).newbyteorder("<")
 
     @property
-    def item_nbytes(self) -> int:
-        """Bytes per inner item: scalar itemsize times prod(inner_shape)."""
+    def fixed_nbytes(self) -> int:
+        """Bytes per unit of variable extent: scalar itemsize times prod(fixed dims).
+
+        For a pattern with no variable dimension this is the exact element
+        byte size; with exactly one variable dimension it is the byte size of
+        one slice along that dimension (the divisor in the codec's
+        ``n = payload_bytes / fixed_nbytes`` inference rule).
+        """
         count = 1
-        for dim in self.inner_shape:
-            count *= dim
+        for dim in self.shape:
+            if dim is not None:
+                count *= dim
         return self.item_dtype.itemsize * count
+
+    @property
+    def _empty_shape(self) -> tuple[int, ...]:
+        """The element shape with every variable extent set to 0."""
+        return tuple(0 if dim is None else dim for dim in self.shape)
+
+    def _matches_pattern(self, shape: tuple[int, ...]) -> bool:
+        return len(shape) == len(self.shape) and all(
+            expected is None or actual == expected
+            for expected, actual in zip(self.shape, shape, strict=True)
+        )
 
     # -- native dtype ------------------------------------------------------
 
@@ -222,10 +270,10 @@ class VlenNDArray(ZDType[np.dtypes.ObjectDType, np.ndarray], HasObjectCodec):  #
     def from_native_dtype(cls, dtype: np.dtype[Any]) -> Self:
         # The NumPy object dtype is ambiguous (it backs several Zarr data
         # types), so this data type is never inferred from a native dtype:
-        # construct VlenNDArray(...) explicitly.
+        # construct NDArray(...) explicitly.
         raise DataTypeValidationError(
             f"Cannot infer {cls._zarr_v3_name!r} from the native dtype {dtype}; "
-            "construct VlenNDArray(dtype=..., inner_shape=...) explicitly."
+            "construct NDArray(dtype=..., shape=...) explicitly."
         )
 
     def to_native_dtype(self) -> np.dtypes.ObjectDType:
@@ -239,31 +287,39 @@ class VlenNDArray(ZDType[np.dtypes.ObjectDType, np.ndarray], HasObjectCodec):  #
 
     @classmethod
     def _check_json_v3(cls, data: DTypeJSON) -> bool:
-        # This mirrors registry/data-types/vlen-ndarray/schema.json exactly, so
-        # that metadata the registered schema rejects never reaches the
+        # This mirrors registry/data-types/ndarray/schema.json, so that
+        # metadata the registered schema rejects never reaches the
         # constructor: anything this returns False for is reported by
         # _from_json_v3 as a DataTypeValidationError, which is the only
         # exception zarr's data type resolution loop catches.
+        #
+        # One deliberate divergence: JSON Schema's "type": "integer" also
+        # admits zero-fractional spellings such as 2.0, which JSON Schema has
+        # no way to exclude. The registry README states normatively that fixed
+        # dimensions MUST be written as JSON integers, and this checker
+        # enforces that (see tests/test_dtype.py's [None, 1.0] case).
         if not (
             isinstance(data, Mapping)
             and set(data.keys()) == {"name", "configuration"}
             and data["name"] == cls._zarr_v3_name
             and isinstance(data["configuration"], Mapping)
-            and set(data["configuration"].keys()) == {"dtype", "inner_shape"}
+            and set(data["configuration"].keys()) == {"dtype", "shape"}
         ):
             return False
         config = data["configuration"]
         dtype = config["dtype"]
-        inner_shape = config["inner_shape"]
+        shape = config["shape"]
         return (
             isinstance(dtype, str)
             and dtype in ALLOWED_SCALAR_DTYPES
-            and isinstance(inner_shape, Sequence)
-            and not isinstance(inner_shape, (str, bytes))
-            # bool is a subclass of int, but the schema rejects it.
+            and isinstance(shape, Sequence)
+            and not isinstance(shape, (str, bytes))
+            and len(shape) >= 1
+            # each member is null (variable) or an integer >= 1; bool is a
+            # subclass of int, but the schema rejects it.
             and all(
-                isinstance(dim, int) and not isinstance(dim, bool) and dim >= 1
-                for dim in inner_shape
+                dim is None or (isinstance(dim, int) and not isinstance(dim, bool) and dim >= 1)
+                for dim in shape
             )
         )
 
@@ -279,12 +335,12 @@ class VlenNDArray(ZDType[np.dtypes.ObjectDType, np.ndarray], HasObjectCodec):  #
             config = cast("Mapping[str, Any]", cast("Mapping[str, Any]", data)["configuration"])
             return cls(
                 dtype=config["dtype"],
-                inner_shape=tuple(config["inner_shape"]),
+                shape=tuple(config["shape"]),
             )
         raise DataTypeValidationError(
             f"Invalid JSON representation of {cls.__name__}. Got {data!r}, expected "
             f'{{"name": "{cls._zarr_v3_name}", "configuration": '
-            f'{{"dtype": "<scalar>", "inner_shape": [...]}}}}'
+            f'{{"dtype": "<scalar>", "shape": [...]}}}}'
         )
 
     @overload
@@ -299,7 +355,8 @@ class VlenNDArray(ZDType[np.dtypes.ObjectDType, np.ndarray], HasObjectCodec):  #
                 "name": self._zarr_v3_name,
                 "configuration": {
                     "dtype": self.dtype,
-                    "inner_shape": list(self.inner_shape),
+                    # None members serialize to JSON null (variable dims).
+                    "shape": list(self.shape),
                 },
             }
         raise ValueError(
@@ -310,7 +367,7 @@ class VlenNDArray(ZDType[np.dtypes.ObjectDType, np.ndarray], HasObjectCodec):  #
     # -- cell coercion (plain arrays) ----------------------------------------
 
     def coerce_cell(self, data: object) -> np.ndarray:
-        """Coerce a cell value to a C-contiguous little-endian ``(n, *inner_shape)`` array.
+        """Coerce a cell value to a C-contiguous little-endian pattern-matching array.
 
         This is the element normalization the codec applies before serializing
         each cell (``coerce_cell(cell).tobytes()`` is the cell's wire payload).
@@ -322,32 +379,65 @@ class VlenNDArray(ZDType[np.dtypes.ObjectDType, np.ndarray], HasObjectCodec):  #
                 f"Cannot convert object {data!r} with type {type(data)} to a scalar "
                 f"compatible with the data type {self}."
             )
-        arr = np.asarray(data, dtype=self.item_dtype)
-        expected_ndim = 1 + len(self.inner_shape)
-        if arr.ndim == expected_ndim and arr.shape[1:] == self.inner_shape:
+        try:
+            arr = np.asarray(data, dtype=self.item_dtype)
+        except ValueError as exc:
+            # e.g. a ragged list-of-lists: NumPy raises "setting an array
+            # element with a sequence". Callers of coerce_cell/cast_scalar are
+            # promised a TypeError for values that are not valid cells.
+            raise TypeError(
+                f"Cannot convert object {data!r} with type {type(data)} to a scalar "
+                f"compatible with the data type {self}: expected a rectangular array "
+                f"matching the pattern {list(self.shape)} (None dimensions are variable)."
+            ) from exc
+        if self._matches_pattern(arr.shape):
             return np.ascontiguousarray(arr)
-        if arr.shape == (0,):
+        if arr.shape == (0,) and self.variable_axes:
             # An empty flat sequence (``[]``, ``np.empty(0)``) is an
-            # unambiguous spelling of the empty element. Any other zero-sized
-            # shape is a caller error and is reported below rather than being
-            # silently reshaped.
-            return arr.reshape((0, *self.inner_shape))
+            # unambiguous spelling of the empty element when the pattern has a
+            # variable dimension. Any other zero-sized shape is a caller error
+            # and is reported below rather than being silently reshaped.
+            return arr.reshape(self._empty_shape)
         raise TypeError(
             f"Cannot convert array of shape {arr.shape} to a scalar of the data type "
-            f"{self}: expected shape (n, {', '.join(map(str, self.inner_shape))})."
+            f"{self}: expected shape matching the pattern {list(self.shape)} "
+            "(None dimensions are variable)."
         )
 
     def payload_to_cell(self, payload: bytes) -> np.ndarray:
         """Decode one element's raw little-endian payload bytes to an ndarray.
 
-        The returned array is a read-only view over ``payload``.
+        The returned array is a read-only view over ``payload``. The payload
+        length determines the variable extents: with no variable dimension
+        the length must equal the fixed element size exactly; with one it
+        must be a whole multiple of :attr:`fixed_nbytes` (the codec inference
+        rule); with two or more only the empty payload is unambiguous.
         """
-        if len(payload) % self.item_nbytes != 0:
+        if len(payload) % self.fixed_nbytes != 0:
             raise ValueError(
                 f"Payload of {len(payload)} bytes is not a whole number of "
-                f"{self.item_nbytes}-byte items for the data type {self}."
+                f"{self.fixed_nbytes}-byte items for the data type {self}."
             )
-        return np.frombuffer(payload, dtype=self.item_dtype).reshape((-1, *self.inner_shape))
+        n = len(payload) // self.fixed_nbytes  # product of the variable extents
+        variable_axes = self.variable_axes
+        if not variable_axes:
+            if n != 1:
+                raise ValueError(
+                    f"Payload of {len(payload)} bytes does not match the fixed element "
+                    f"size of {self.fixed_nbytes} bytes for the data type {self}."
+                )
+            shape = cast("tuple[int, ...]", self.shape)
+        elif len(variable_axes) == 1:
+            shape = tuple(n if dim is None else dim for dim in self.shape)
+        else:
+            if n != 0:
+                raise ValueError(
+                    f"Payload of {len(payload)} bytes is ambiguous for the data type "
+                    f"{self}: a pattern with multiple variable dimensions only has a "
+                    "well-defined shape for the empty payload."
+                )
+            shape = self._empty_shape
+        return np.frombuffer(payload, dtype=self.item_dtype).reshape(shape)
 
     # -- scalars (boxed; see module docstring) --------------------------------
 
@@ -364,7 +454,12 @@ class VlenNDArray(ZDType[np.dtypes.ObjectDType, np.ndarray], HasObjectCodec):  #
         return _box(self.coerce_cell(data))
 
     def default_scalar(self) -> np.ndarray:
-        return _box(np.empty((0, *self.inner_shape), dtype=self.item_dtype))
+        # With a variable dimension: the empty element (variable extents 0).
+        # All-fixed pattern: the zero-filled element. Matches the registered
+        # fill-value recommendation.
+        if self.variable_axes:
+            return _box(np.empty(self._empty_shape, dtype=self.item_dtype))
+        return _box(np.zeros(cast("tuple[int, ...]", self.shape), dtype=self.item_dtype))
 
     def to_json_scalar(self, data: object, *, zarr_format: ZarrFormat) -> JSON:
         # Scalars (fill values) serialize as base64 of the raw little-endian

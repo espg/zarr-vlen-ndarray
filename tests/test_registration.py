@@ -21,13 +21,13 @@ import zarr
 from zarr.dtype import data_type_registry
 
 from conftest import as_object_array
-from zarr_vlen_ndarray import VlenNDArray, VlenNDArrayCodec
+from zarr_vlen_ndarray import NDArray, VlenNDArrayCodec
 
-ZDTYPE = VlenNDArray(dtype="float32", inner_shape=(2,))
+ZDTYPE = NDArray(dtype="float32", shape=(None, 2))
 
 NO_DTYPE_ERROR = (
-    "No Zarr data type found that matches {'name': 'vlen-ndarray', "
-    "'configuration': {'dtype': 'float32', 'inner_shape': [2]}}"
+    "No Zarr data type found that matches {'name': 'ndarray', "
+    "'configuration': {'dtype': 'float32', 'shape': [None, 2]}}"
 )
 
 
@@ -59,7 +59,7 @@ def test_fresh_interpreter_with_import(tmp_path):
         import zarr
         import zarr_vlen_ndarray  # registers the data type and codec
         arr = zarr.open_array(r"{tmp_path / "a"}", mode="r")
-        assert type(arr.metadata.data_type).__name__ == "VlenNDArray"
+        assert type(arr.metadata.data_type).__name__ == "NDArray"
         cells = arr[:]
         assert cells[0].shape == (3, 2)
         assert np.array_equal(cells[0], np.arange(6, dtype="<f4").reshape(3, 2))
@@ -99,7 +99,7 @@ def test_data_type_entry_point_correct_but_upstream_never_flushes(tmp_path):
         assert "zarr_vlen_ndarray" not in sys.modules
         import zarr
         from zarr.core.dtype import data_type_registry
-        assert "vlen-ndarray" in [e.name for e in data_type_registry._lazy_load_list]
+        assert "ndarray" in [e.name for e in data_type_registry._lazy_load_list]
         data_type_registry._lazy_load()
         assert "zarr_vlen_ndarray" in sys.modules
         arr = zarr.open_array(r"{tmp_path / "a"}", mode="r")
@@ -127,8 +127,8 @@ def test_without_package_failure_mode(tmp_path):
     """What a vanilla-zarr user (package not installed) sees. Verbatim:
 
         ValueError: No Zarr data type found that matches {'name':
-        'vlen-ndarray', 'configuration': {'dtype': 'float32',
-        'inner_shape': [2]}}
+        'ndarray', 'configuration': {'dtype': 'float32',
+        'shape': [None, 2]}}
 
     Data type resolution happens before codec resolution when parsing array
     metadata, so unregistering the data type alone reproduces exactly what a
@@ -136,13 +136,13 @@ def test_without_package_failure_mode(tmp_path):
     _build_store(tmp_path / "a")
 
     data_type_registry._lazy_load()
-    data_type_registry.unregister("vlen-ndarray")
+    data_type_registry.unregister("ndarray")
     try:
         with pytest.raises(ValueError) as excinfo:
             zarr.open_array(tmp_path / "a", mode="r")
         assert str(excinfo.value) == NO_DTYPE_ERROR
     finally:
-        data_type_registry.register("vlen-ndarray", VlenNDArray)
+        data_type_registry.register("ndarray", NDArray)
 
     # sanity: works again after re-registration
     reopened = zarr.open_array(tmp_path / "a", mode="r")
@@ -155,4 +155,4 @@ def test_import_registration_is_idempotent():
     import zarr_vlen_ndarray
 
     importlib.reload(zarr_vlen_ndarray)
-    assert data_type_registry.get("vlen-ndarray") is VlenNDArray
+    assert data_type_registry.get("ndarray") is NDArray

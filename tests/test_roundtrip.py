@@ -6,10 +6,10 @@ import zarr
 from zarr.codecs import ZstdCodec
 
 from conftest import as_object_array
-from zarr_vlen_ndarray import VlenNDArray, VlenNDArrayCodec, VlenScalar, unbox
+from zarr_vlen_ndarray import NDArray, VlenNDArrayCodec, VlenScalar, unbox
 
-FLOAT32_2COL = VlenNDArray(dtype="float32", inner_shape=(2,))
-UINT64_FLAT = VlenNDArray(dtype="uint64", inner_shape=())
+FLOAT32_2COL = NDArray(dtype="float32", shape=(None, 2))
+UINT64_FLAT = NDArray(dtype="uint64", shape=(None,))
 
 
 def _assert_cells_equal(expected_cells, got):
@@ -59,8 +59,8 @@ def test_reopen_preserves_dtype_and_values(tmp_path, float32_cells):
     reopened = zarr.open_array(tmp_path / "a", mode="r")
     assert reopened.metadata.data_type == FLOAT32_2COL
     assert reopened.metadata.to_dict()["data_type"] == {
-        "name": "vlen-ndarray",
-        "configuration": {"dtype": "float32", "inner_shape": [2]},
+        "name": "ndarray",
+        "configuration": {"dtype": "float32", "shape": [None, 2]},
     }
     _assert_cells_equal(float32_cells, reopened[:])
 
@@ -161,13 +161,50 @@ def test_sharding_codec_wrapped(tmp_path, float32_cells):
     assert inner[0]["name"] == "vlen-ndarray"
 
 
-def test_codec_requires_vlen_ndarray_dtype(tmp_path):
+def test_multi_dim_trailing_roundtrip(tmp_path):
+    """A fixed-trailing multi-dim pattern ([null, 3, 2]) round-trips."""
+    zdtype = NDArray(dtype="float32", shape=(None, 3, 2))
+    rng = np.random.default_rng(3)
+    cells = [rng.random((n, 3, 2)).astype("<f4") for n in (2, 0, 5)]
+    arr = zarr.create_array(
+        store=tmp_path / "a",
+        shape=(len(cells),),
+        chunks=(len(cells),),
+        dtype=zdtype,
+        serializer=VlenNDArrayCodec(),
+    )
+    arr[:] = as_object_array(cells)
+    _assert_cells_equal(cells, arr[:])
+    reopened = zarr.open_array(tmp_path / "a", mode="r")
+    assert reopened.metadata.to_dict()["data_type"]["configuration"]["shape"] == [None, 3, 2]
+
+
+def test_codec_requires_ndarray_dtype(tmp_path):
     with pytest.raises(ValueError, match="only compatible"):
         zarr.create_array(
             store=tmp_path / "a",
             shape=(4,),
             chunks=(4,),
             dtype="float32",
+            serializer=VlenNDArrayCodec(),
+        )
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [(3, 2), (2, None), (None, None)],
+    ids=["all_fixed", "non_leading_variable", "two_variable"],
+)
+def test_codec_rejects_unserved_shape_patterns(tmp_path, shape):
+    """The data type accepts the full pattern grammar, but the vlen-ndarray
+    codec serves only [null, d1, ..., dk] — pairing it with any other pattern
+    must fail at array creation."""
+    with pytest.raises(ValueError, match="exactly one variable dimension"):
+        zarr.create_array(
+            store=tmp_path / "a",
+            shape=(4,),
+            chunks=(4,),
+            dtype=NDArray(dtype="float32", shape=shape),
             serializer=VlenNDArrayCodec(),
         )
 

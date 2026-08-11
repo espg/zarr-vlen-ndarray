@@ -7,9 +7,15 @@ therefore byte-identical to what ``vlen-bytes`` produces for the equivalent
 raw little-endian payloads (each element serialized as
 ``ndarray.astype('<...').tobytes()`` in C order). See SPEC.md.
 
-The codec is parameter-free: the inner scalar dtype and inner_shape come from
-the array's ``vlen-ndarray`` data type at encode/decode time, so it MUST be
-paired with that data type.
+The codec is parameter-free: the inner scalar dtype and shape pattern come
+from the array's ``ndarray`` data type at encode/decode time, so it MUST be
+paired with that data type — and it serves only shape patterns with exactly
+one variable dimension, in the leading position (``[null, d1, ..., dk]``).
+Any single variable dimension is length-inferable (``n = payload_bytes /
+fixed_nbytes``) wherever it sits, so no per-element shape header is needed;
+restricting it to the *leading* position is this codec's design choice, and
+is what makes growing an element append bytes to its payload — the property
+that preserves byte identity with existing ``bytes`` + ``vlen-bytes`` stores.
 """
 
 from __future__ import annotations
@@ -22,7 +28,7 @@ from numcodecs.vlen import VLenBytes
 from zarr.abc.codec import ArrayBytesCodec
 from zarr.core.common import parse_named_configuration
 
-from zarr_vlen_ndarray.dtype import VlenNDArray
+from zarr_vlen_ndarray.dtype import NDArray
 
 if TYPE_CHECKING:
     from typing import Self
@@ -36,10 +42,16 @@ CODEC_NAME = "vlen-ndarray"
 # Parameter-free, so a module-level instance is fine (mirrors zarr's vlen codecs).
 _vlen_bytes_codec = VLenBytes()
 
+# The framing writes the chunk element count and every element's payload length
+# as u32le, so both are bounded by 2**32 - 1. numcodecs stores the low 32 bits
+# without complaint, so the spec's "encoders MUST report an error rather than
+# truncate or overflow either count" is enforced here before the hand-off.
+U32_MAX = 0xFFFFFFFF
+
 
 @dataclass(frozen=True)
 class VlenNDArrayCodec(ArrayBytesCodec):
-    """Array->bytes codec for the ``vlen-ndarray`` data type."""
+    """Array->bytes codec for the ``ndarray`` data type (one leading variable dim)."""
 
     @classmethod
     def from_dict(cls, data: dict[str, JSON]) -> Self:
@@ -65,10 +77,20 @@ class VlenNDArrayCodec(ArrayBytesCodec):
         dtype: Any,
         chunk_grid: Any,
     ) -> None:
-        if not isinstance(dtype, VlenNDArray):
+        if not isinstance(dtype, NDArray):
             raise ValueError(
                 f"The {CODEC_NAME!r} codec is only compatible with the "
-                f"{VlenNDArray._zarr_v3_name!r} data type, got {dtype}."
+                f"{NDArray._zarr_v3_name!r} data type, got {dtype}."
+            )
+        if dtype.variable_axes != (0,):
+            raise ValueError(
+                f"The {CODEC_NAME!r} codec serves only shape patterns with exactly "
+                "one variable dimension, in the leading position (e.g. [None, 2]); "
+                f"got the pattern {list(dtype.shape)}. Other patterns need a "
+                "different array->bytes codec (fixed shapes: the core 'bytes' "
+                "codec; a single non-leading variable dimension: a header-free "
+                "codec, not registered; two or more variable dimensions: a "
+                "per-element shape-headered codec)."
             )
 
     async def _decode_single(
@@ -77,13 +99,23 @@ class VlenNDArrayCodec(ArrayBytesCodec):
         chunk_spec: ArraySpec,
     ) -> NDBuffer:
         zdtype = chunk_spec.dtype
-        assert isinstance(zdtype, VlenNDArray)
+        assert isinstance(zdtype, NDArray)
         raw_bytes = chunk_bytes.as_array_like()
         payloads = _vlen_bytes_codec.decode(raw_bytes)
         assert payloads.dtype == np.object_
         decoded = np.empty(payloads.shape, dtype=object)
         for i, payload in enumerate(payloads):
             decoded[i] = zdtype.payload_to_cell(payload)
+        expected = int(np.prod(chunk_spec.shape))
+        if decoded.size != expected:
+            # The spec requires the framed element count to equal the product of
+            # the shape of the chunk this codec encodes; reshape alone would
+            # report this as an opaque NumPy message.
+            raise ValueError(
+                f"The {CODEC_NAME!r} codec decoded {decoded.size} elements from a chunk "
+                f"of shape {tuple(chunk_spec.shape)}, which holds {expected}: the framed "
+                "u32le element count must equal the product of the chunk shape."
+            )
         decoded = decoded.reshape(chunk_spec.shape)
         return chunk_spec.prototype.nd_buffer.from_numpy_array(decoded)
 
@@ -93,14 +125,27 @@ class VlenNDArrayCodec(ArrayBytesCodec):
         chunk_spec: ArraySpec,
     ) -> Buffer | None:
         zdtype = chunk_spec.dtype
-        assert isinstance(zdtype, VlenNDArray)
+        assert isinstance(zdtype, NDArray)
         cells = chunk_array.as_numpy_array().reshape(-1)
+        if cells.size > U32_MAX:
+            raise ValueError(
+                f"The {CODEC_NAME!r} codec cannot encode a chunk of {cells.size} elements: "
+                f"the framed element count is a u32le, so a chunk holds at most {U32_MAX} "
+                "elements."
+            )
         as_bytes = np.empty(cells.shape, dtype=object)
         for i, cell in enumerate(cells):
             if cell is None:
                 as_bytes[i] = b""
             else:
-                as_bytes[i] = zdtype.coerce_cell(cell).tobytes()
+                payload = zdtype.coerce_cell(cell).tobytes()
+                if len(payload) > U32_MAX:
+                    raise ValueError(
+                        f"The {CODEC_NAME!r} codec cannot encode element {i} of "
+                        f"{len(payload)} bytes: each element's length prefix is a u32le, "
+                        f"so a payload is at most {U32_MAX} bytes."
+                    )
+                as_bytes[i] = payload
         return chunk_spec.prototype.buffer.from_bytes(_vlen_bytes_codec.encode(as_bytes))
 
     def compute_encoded_size(self, input_byte_length: int, _chunk_spec: ArraySpec) -> int:

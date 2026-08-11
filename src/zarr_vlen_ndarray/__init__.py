@@ -1,26 +1,36 @@
-"""Typed variable-length ndarray data type (``vlen-ndarray``) for Zarr v3.
+"""Typed ndarray elements for Zarr v3: the ``ndarray`` data type and the
+``vlen-ndarray`` array->bytes codec.
 
 Importing this package registers the data type and codec with zarr-python.
-With the package *installed*, importing it is not even necessary: zarr-python
-discovers both through the ``zarr.data_type`` and ``zarr.codecs`` entry-point
-groups, so a plain ``zarr.open`` resolves vlen-ndarray stores.
+The package also declares both entry-point groups, but only one of them is
+live upstream: zarr-python lazy-loads the ``zarr.codecs`` entry point on
+demand, while ``zarr.data_type`` entry points are collected into the data type
+registry's lazy-load list that zarr-python never flushes (pinned by
+``tests/test_registration.py``). So ``import zarr_vlen_ndarray`` is still
+required before opening an ndarray store.
 """
 
 from zarr.dtype import data_type_registry
 from zarr.registry import register_codec
 
 from zarr_vlen_ndarray.codec import CODEC_NAME, VlenNDArrayCodec
-from zarr_vlen_ndarray.dtype import DTYPE_NAME, VlenNDArray, VlenScalar, unbox
+from zarr_vlen_ndarray.dtype import DTYPE_NAME, NDArray, VlenScalar, unbox
 
 try:
     from zarr_vlen_ndarray._version import __version__
 except ImportError:  # pragma: no cover - editable install before build
     __version__ = "0.0.0+unknown"
 
+#: Unambiguous alias for :class:`NDArray`, whose name follows zarr-python's
+#: ZDType convention (class named after the registered data type) and so
+#: collides with ``numpy.typing.NDArray`` at the import site.
+NDArrayDType = NDArray
+
 __all__ = [
     "CODEC_NAME",
     "DTYPE_NAME",
-    "VlenNDArray",
+    "NDArray",
+    "NDArrayDType",
     "VlenNDArrayCodec",
     "VlenScalar",
     "__version__",
@@ -31,5 +41,5 @@ __all__ = [
 # sufficient even where entry-point discovery is unavailable.
 # The ignore shares the root cause noted on the class: np.ndarray scalars sit
 # outside zarr's TBaseScalar bound.
-data_type_registry.register(VlenNDArray._zarr_v3_name, VlenNDArray)  # type: ignore[arg-type]
+data_type_registry.register(NDArray._zarr_v3_name, NDArray)  # type: ignore[arg-type]
 register_codec(CODEC_NAME, VlenNDArrayCodec)
